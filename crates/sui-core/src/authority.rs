@@ -999,6 +999,14 @@ impl AuthorityState {
         }
     }
 
+    pub fn handle_epoch_request(&self, request: &EpochRequest) -> SuiResult<EpochResponse> {
+        let epoch_info = match &request.epoch_id {
+            Some(id) => self.database.get_authenticated_epoch(id)?,
+            None => Some(self.database.get_latest_authenticated_epoch()),
+        };
+        Ok(EpochResponse { epoch_info })
+    }
+
     // TODO: This function takes both committee and genesis as parameter.
     // Technically genesis already contains committee information. Could consider merging them.
     pub async fn new(
@@ -1116,7 +1124,7 @@ impl AuthorityState {
     }
 
     // Continually pop in-progress txes from the WAL and try to drive them to completion.
-    async fn process_tx_recovery_log(&self, limit: Option<usize>) -> SuiResult {
+    pub async fn process_tx_recovery_log(&self, limit: Option<usize>) -> SuiResult {
         let mut limit = limit.unwrap_or(usize::max_value());
         while limit > 0 {
             limit -= 1;
@@ -1177,6 +1185,10 @@ impl AuthorityState {
         // TODO: Do we want to make it possible to subscribe to committee changes?
         self.committee.swap(Arc::new(new_committee));
         Ok(())
+    }
+
+    pub(crate) fn promote_signed_epoch_to_cert(&self, cert: CertifiedEpoch) -> SuiResult {
+        self.database.store_epoch_cert(cert)
     }
 
     #[cfg(test)]

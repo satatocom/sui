@@ -11,13 +11,14 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::thread;
 use std::time::Duration;
+use sui_sdk::crypto::KeystoreType;
 use sui_sdk::{
     crypto::SuiKeystore,
     json::SuiJsonValue,
     types::{
         base_types::{ObjectID, SuiAddress},
         crypto::Signature,
-        id::Info,
+        id::UID,
         messages::Transaction,
     },
     SuiClient,
@@ -27,7 +28,7 @@ use sui_sdk::{
 async fn main() -> Result<(), anyhow::Error> {
     let opts: TicTacToeOpts = TicTacToeOpts::parse();
     let keystore_path = opts.keystore_path.unwrap_or_else(default_keystore_path);
-    let keystore = SuiKeystore::load_or_create(&keystore_path)?;
+    let keystore = KeystoreType::File(keystore_path).init()?;
 
     let game = TicTacToe {
         game_package_id: opts.game_package_id,
@@ -297,7 +298,7 @@ enum TicTacToeCommand {
 // Data structure mirroring move object `games::shared_tic_tac_toe::TicTacToe` for deserialization.
 #[derive(Deserialize, Debug)]
 struct TicTacToeState {
-    info: Info,
+    info: UID,
     gameboard: Vec<Vec<u8>>,
     cur_turn: u8,
     game_status: u8,

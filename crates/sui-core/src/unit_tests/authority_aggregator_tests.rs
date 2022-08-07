@@ -285,7 +285,6 @@ where
     assert!(stake >= quorum_threshold);
 
     CertifiedTransaction::new_with_signatures(
-        committee.epoch(),
         transaction.unwrap().to_transaction(),
         votes,
         committee,
@@ -951,6 +950,10 @@ async fn test_quorum_once_with_timeout() {
             _request: CheckpointRequest,
         ) -> Result<CheckpointResponse, SuiError> {
             unreachable!();
+        }
+
+        async fn handle_epoch(&self, _request: EpochRequest) -> Result<EpochResponse, SuiError> {
+            unreachable!()
         }
     }
 

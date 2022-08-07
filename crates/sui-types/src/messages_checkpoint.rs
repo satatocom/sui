@@ -7,7 +7,7 @@ use std::slice::Iter;
 
 use crate::base_types::ExecutionDigests;
 use crate::committee::EpochId;
-use crate::crypto::{AuthoritySignInfo, AuthorityWeakQuorumSignInfo};
+use crate::crypto::{AuthoritySignInfo, AuthoritySignInfoTrait, AuthorityWeakQuorumSignInfo};
 use crate::error::SuiResult;
 use crate::messages::CertifiedTransaction;
 use crate::waypoint::{Waypoint, WaypointDiff};
@@ -370,7 +370,6 @@ impl CertifiedCheckpointSummary {
         let certified_checkpoint = CertifiedCheckpointSummary {
             summary: signed_checkpoints[0].summary.clone(),
             auth_signature: AuthorityWeakQuorumSignInfo::new_with_signatures(
-                committee.epoch,
                 signed_checkpoints
                     .into_iter()
                     .map(|v| (v.auth_signature.authority, v.auth_signature.signature))

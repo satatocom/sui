@@ -5,9 +5,9 @@
 use super::{base_types::*, batch::*, committee::Committee, error::*, event::Event};
 use crate::committee::{EpochId, StakeUnit};
 use crate::crypto::{
-    sha3_hash, AuthoritySignInfo, AuthoritySignature, AuthorityStrongQuorumSignInfo,
-    Ed25519SuiSignature, EmptySignInfo, Signable, Signature, SuiAuthoritySignature, SuiSignature,
-    SuiSignatureInner, ToFromBytes, VerificationObligation,
+    sha3_hash, AuthoritySignInfo, AuthoritySignInfoTrait, AuthoritySignature,
+    AuthorityStrongQuorumSignInfo, Ed25519SuiSignature, EmptySignInfo, Signable, Signature,
+    SuiAuthoritySignature, SuiSignature, SuiSignatureInner, ToFromBytes, VerificationObligation,
 };
 use crate::gas::GasCostSummary;
 use crate::messages_checkpoint::{CheckpointFragment, CheckpointSequenceNumber};
@@ -1468,7 +1468,6 @@ pub type CertifiedTransactionEffects = TransactionEffectsEnvelope<AuthorityStron
 
 impl CertifiedTransactionEffects {
     pub fn new(
-        epoch: EpochId,
         effects: TransactionEffects,
         signatures: Vec<(AuthorityName, AuthoritySignature)>,
         committee: &Committee,
@@ -1477,7 +1476,7 @@ impl CertifiedTransactionEffects {
             transaction_effects_digest: OnceCell::from(effects.digest()),
             effects,
             auth_signature: AuthorityStrongQuorumSignInfo::new_with_signatures(
-                epoch, signatures, committee,
+                signatures, committee,
             )?,
         })
     }
@@ -1660,7 +1659,6 @@ impl<'a> SignatureAggregator<'a> {
 
         if self.weight >= self.committee.quorum_threshold() {
             self.partial.auth_sign_info = AuthorityStrongQuorumSignInfo::new_with_signatures(
-                self.partial.auth_sign_info.epoch,
                 self.signature_stash.clone(),
                 self.committee,
             )?;
@@ -1683,7 +1681,6 @@ impl CertifiedTransaction {
     }
 
     pub fn new_with_signatures(
-        epoch: EpochId,
         transaction: Transaction,
         signatures: Vec<(AuthorityName, AuthoritySignature)>,
         committee: &Committee,
@@ -1694,7 +1691,7 @@ impl CertifiedTransaction {
             data: transaction.data,
             tx_signature: transaction.tx_signature,
             auth_sign_info: AuthorityStrongQuorumSignInfo::new_with_signatures(
-                epoch, signatures, committee,
+                signatures, committee,
             )?,
         })
     }
@@ -1802,13 +1799,20 @@ pub struct EpochInfo {
     committee: Committee,
     /// The first checkpoint included in this epoch.
     first_checkpoint: CheckpointSequenceNumber,
+    /// Digest of the epoch info from the previous epoch.
+    prev_digest: EpochInfoDigest,
 }
 
 impl EpochInfo {
-    pub fn new(committee: Committee, first_checkpoint: CheckpointSequenceNumber) -> Self {
+    pub fn new(
+        committee: Committee,
+        first_checkpoint: CheckpointSequenceNumber,
+        prev_digest: EpochInfoDigest,
+    ) -> Self {
         Self {
             committee,
             first_checkpoint,
+            prev_digest,
         }
     }
 
@@ -1823,7 +1827,17 @@ impl EpochInfo {
     pub fn first_checkpoint(&self) -> &CheckpointSequenceNumber {
         &self.first_checkpoint
     }
+
+    pub fn prev_epoch_info_digest(&self) -> &EpochInfoDigest {
+        &self.prev_digest
+    }
+
+    pub fn digest(&self) -> EpochInfoDigest {
+        sha3_hash(self)
+    }
 }
+
+pub type EpochInfoDigest = [u8; 32];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpochEnvelop<S> {
@@ -1838,9 +1852,27 @@ pub type CertifiedEpoch = EpochEnvelop<AuthorityStrongQuorumSignInfo>;
 impl GenesisEpoch {
     pub fn new(committee: Committee) -> Self {
         Self {
-            epoch_info: EpochInfo::new(committee, 0),
+            epoch_info: EpochInfo::new(committee, 0, EpochInfoDigest::default()),
             auth_sign_info: EmptySignInfo {},
         }
+    }
+
+    pub fn verify(&self, genesis_committee: Committee) -> SuiResult {
+        fp_ensure!(
+            self.epoch_info.first_checkpoint == 0,
+            SuiError::InvalidAuthenticatedEpoch(
+                "Genesis epoch's first checkpoint must be 0".to_string()
+            )
+        );
+        fp_ensure!(
+            self.epoch_info.epoch() == 0,
+            SuiError::InvalidAuthenticatedEpoch("Genesis epoch must be epoch 0".to_string())
+        );
+        fp_ensure!(
+            self.epoch_info.committee == genesis_committee,
+            SuiError::InvalidAuthenticatedEpoch("Genesis epoch committee mismatch".to_string())
+        );
+        Ok(())
     }
 }
 
@@ -1850,9 +1882,10 @@ impl SignedEpoch {
         authority: AuthorityName,
         secret: &dyn signature::Signer<AuthoritySignature>,
         first_checkpoint: CheckpointSequenceNumber,
+        prev_epoch_info: &EpochInfo,
     ) -> Self {
         let epoch = committee.epoch;
-        let epoch_info = EpochInfo::new(committee, first_checkpoint);
+        let epoch_info = EpochInfo::new(committee, first_checkpoint, prev_epoch_info.digest());
         let signature = AuthoritySignature::new(&epoch_info, secret);
         Self {
             epoch_info,
@@ -1874,7 +1907,9 @@ impl SignedEpoch {
         let epoch = self.epoch_info.epoch();
         fp_ensure!(
             epoch != 0 && epoch - 1 == self.auth_sign_info.epoch,
-            SuiError::from("Epoch number in the committee inconsistent with signature")
+            SuiError::InvalidAuthenticatedEpoch(
+                "Epoch number in the committee inconsistent with signature".to_string()
+            )
         );
         self.auth_sign_info
             .verify(&self.epoch_info, prev_epoch_committee)?;
@@ -1883,13 +1918,29 @@ impl SignedEpoch {
 }
 
 impl CertifiedEpoch {
+    pub fn new(
+        epoch_info: &EpochInfo,
+        signatures: Vec<(AuthorityName, AuthoritySignature)>,
+        prev_epoch_committee: &Committee,
+    ) -> SuiResult<Self> {
+        Ok(Self {
+            epoch_info: epoch_info.clone(),
+            auth_sign_info: AuthorityStrongQuorumSignInfo::new_with_signatures(
+                signatures,
+                prev_epoch_committee,
+            )?,
+        })
+    }
+
     /// Verify the signature of this certified epoch. The committee to verify this must be the
     /// committee from the previous epoch, as this is signed by a quorum from the previous epoch.
     pub fn verify(&self, committee: &Committee) -> SuiResult {
         let epoch = self.epoch_info.epoch();
         fp_ensure!(
             epoch != 0 && epoch - 1 == self.auth_sign_info.epoch,
-            SuiError::from("Epoch number in the committee inconsistent with signature")
+            SuiError::InvalidAuthenticatedEpoch(
+                "Epoch number in the committee inconsistent with signature".to_string()
+            )
         );
         self.auth_sign_info.verify(&self.epoch_info, committee)?;
         Ok(())
@@ -1927,4 +1978,14 @@ impl AuthenticatedEpoch {
             Self::Genesis(g) => &g.epoch_info,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpochRequest {
+    pub epoch_id: Option<EpochId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpochResponse {
+    pub epoch_info: Option<AuthenticatedEpoch>,
 }

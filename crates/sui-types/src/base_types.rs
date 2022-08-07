@@ -145,8 +145,7 @@ impl SuiAddress {
         S: serde::ser::Serializer,
     {
         serializer.serialize_str(
-            &*key
-                .map(|addr| encode_bytes_hex(&addr))
+            &key.map(|addr| encode_bytes_hex(&addr))
                 .unwrap_or_else(|| "".to_string()),
         )
     }
@@ -186,7 +185,7 @@ impl TryFrom<Vec<u8>> for SuiAddress {
 impl From<&AuthorityPublicKeyBytes> for SuiAddress {
     fn from(pkb: &AuthorityPublicKeyBytes) -> Self {
         let mut hasher = Sha3_256::default();
-        hasher.update(&[AuthorityPublicKey::FLAG]);
+        hasher.update(&[AuthorityPublicKey::SIGNATURE_SCHEME.flag()]);
         hasher.update(pkb);
         let g_arr = hasher.finalize();
 
@@ -199,7 +198,7 @@ impl From<&AuthorityPublicKeyBytes> for SuiAddress {
 impl<T: SuiPublicKey> From<&T> for SuiAddress {
     fn from(pk: &T) -> Self {
         let mut hasher = Sha3_256::default();
-        hasher.update(&[T::FLAG]);
+        hasher.update(&[T::SIGNATURE_SCHEME.flag()]);
         hasher.update(pk);
         let g_arr = hasher.finalize();
 
@@ -935,11 +934,21 @@ impl FromStr for SuiAddress {
     }
 }
 
-impl std::str::FromStr for ObjectID {
+impl FromStr for ObjectID {
     type Err = ObjectIDParseError;
 
     fn from_str(s: &str) -> Result<Self, ObjectIDParseError> {
         // Try to match both the literal (0xABC..) and the normal (ABC)
         Self::from_hex(s).or_else(|_| Self::from_hex_literal(s))
+    }
+}
+
+impl FromStr for TransactionDigest {
+    type Err = base64ct::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut result = [0u8; TRANSACTION_DIGEST_LENGTH];
+        base64ct::Base64::decode(s, &mut result)?;
+        Ok(TransactionDigest(result))
     }
 }

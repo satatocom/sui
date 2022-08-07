@@ -18,7 +18,11 @@ import {
   TransactionDigest,
   TransactionEffectsResponse,
   TransactionResponse,
+  SuiObjectRef,
+  getObjectReference,
+  Coin,
 } from '../types';
+import { SignatureScheme } from '../cryptography/publickey';
 
 const isNumber = (val: any): val is number => typeof val === 'number';
 const isAny = (_val: any): _val is any => true;
@@ -51,6 +55,11 @@ export class JsonRpcProvider extends Provider {
     }
   }
 
+  async getGasObjectsOwnedByAddress(address: string): Promise<SuiObjectInfo[]> {
+    const objects = await this.getObjectsOwnedByAddress(address);
+    return objects.filter((obj: SuiObjectInfo) => Coin.isSUI(obj));
+  }
+
   async getObjectsOwnedByObject(objectId: string): Promise<SuiObjectInfo[]> {
     try {
       return await this.client.requestWithType(
@@ -75,6 +84,11 @@ export class JsonRpcProvider extends Provider {
     } catch (err) {
       throw new Error(`Error fetching object info: ${err} for id ${objectId}`);
     }
+  }
+
+  async getObjectRef(objectId: string): Promise<SuiObjectRef | undefined> {
+    const resp = await this.getObject(objectId);
+    return getObjectReference(resp);
   }
 
   async getObjectBatch(objectIds: string[]): Promise<GetObjectDataResponse[]> {
@@ -187,14 +201,14 @@ export class JsonRpcProvider extends Provider {
 
   async executeTransaction(
     txnBytes: string,
-    flag: string,
+    signatureScheme: SignatureScheme,
     signature: string,
     pubkey: string
   ): Promise<TransactionResponse> {
     try {
       const resp = await this.client.requestWithType(
         'sui_executeTransaction',
-        [txnBytes, flag, signature, pubkey],
+        [txnBytes, signatureScheme, signature, pubkey],
         isTransactionResponse
       );
       return resp;
@@ -252,11 +266,11 @@ export class JsonRpcProvider extends Provider {
       return await this.client.requestWithType(
         'sui_syncAccountState',
         [address],
-        isAny,
+        isAny
       );
     } catch (err) {
       throw new Error(
-        `Error sync account address for address: ${address} with error: ${err}`,
+        `Error sync account address for address: ${address} with error: ${err}`
       );
     }
   }
